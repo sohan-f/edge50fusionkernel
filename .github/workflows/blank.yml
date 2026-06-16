@@ -85,7 +85,21 @@ jobs:
             echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/parrot_defconfig
           fi
 
-      # Step 8: Execute the compilation script with strict hardware execution constraints
+      # NEW: Step 8: Reconstruct the workspace structure layout required by Qualcomm's script
+      - name: Setup Qualcomm Bazel Workspace Environment
+        run: |
+          # Create expected companion directories in the parent directory level
+          mkdir -p ../tools ../build
+          
+          # Download and configure Bazelisk to act as the main hermetic 'bazel' tool manager
+          curl -Lo ../tools/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          chmod +x ../tools/bazel
+          
+          # Expose workspace structure keys to the parent root directory folder
+          cp bazel.WORKSPACE ../WORKSPACE
+          cp .bazelversion ../.bazelversion 2>/dev/null || true
+
+      # Step 9: Execute the compilation script with strict hardware execution constraints
       - name: Compile Kernel via Bazel
         run: |
           python3 build_with_bazel.py -t parrot gki \
@@ -94,7 +108,7 @@ jobs:
             --local_ram_resources=6144 \
             -o "$(pwd)/out"
 
-      # Step 9: Save the compilation state if the build completed successfully
+      # Step 10: Save the compilation state if the build completed successfully
       - name: Save Bazel Cache
         if: success()
         uses: actions/cache/save@v4
@@ -102,7 +116,7 @@ jobs:
           path: bazel-cache
           key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
 
-      # Step 10: Extract successfully compiled images and generate safety hashes
+      # Step 11: Extract successfully compiled images and generate safety hashes
       - name: Bundle Artifacts and Generate Checksums
         run: |
           mkdir -p distribution
@@ -114,7 +128,7 @@ jobs:
           cd distribution
           sha256sum * > SHA256SUMS.txt
 
-      # Step 11: Upload the flashable output items
+      # Step 12: Upload the flashable output items
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
