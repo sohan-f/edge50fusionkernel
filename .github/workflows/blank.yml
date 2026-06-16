@@ -5,6 +5,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  USE_BAZEL_VERSION: '6.4.0' # CRITICAL: Forces Bazelisk to download a compatible compiler core
 
 jobs:
   build:
@@ -41,7 +42,7 @@ jobs:
           sudo apt install -y bc bison build-essential flex git libelf-dev libssl-dev openssl zip unzip
           pip install PyYAML
 
-      # FIX: Adjusted cache tracking path completely outside the main repository directory root
+      # Step 4: Restore previous compiler state to save execution hours
       - name: Restore Bazel Cache
         id: cache-bazel
         uses: actions/cache/restore@v4
@@ -95,14 +96,16 @@ jobs:
           curl -Lo ../tools/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           chmod +x ../tools/bazel
           
+          # FIX: Explicitly lock Bazelisk to 6.4.0 inside layout files to reinforce the env flag
+          echo "6.4.0" > ../.bazelversion
+          echo "6.4.0" > .bazelversion
+          
           # Expose workspace structure keys to the parent root directory folder
           cp bazel.WORKSPACE ../WORKSPACE
-          cp .bazelversion ../.bazelversion 2>/dev/null || true
 
       # Step 9: Execute the compilation script with unique isolated cache location parameters
       - name: Compile Kernel via Bazel
         run: |
-          # FIX: Added --cache_dir to shift execution root safely outside the workspace layout boundaries
           python3 build_with_bazel.py -t parrot gki \
             --cache_dir "/home/runner/bazel-cache" \
             --lto=thin \
@@ -110,7 +113,7 @@ jobs:
             --local_ram_resources=6144 \
             -o "$(pwd)/out"
 
-      # FIX: Adjusted cache compression targeting to capture isolated path structural elements
+      # Step 10: Save the compilation state if the build completed successfully
       - name: Save Bazel Cache
         if: success()
         uses: actions/cache/save@v4
