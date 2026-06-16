@@ -1,18 +1,18 @@
 name: Build Motorola Parrot Android 16 Kernel
 
 on:
-  workflow_dispatch: # Allows you to trigger the build manually via the Actions Tab
+  workflow_dispatch:
 
 env:
-  PYTHON_VERSION: '3.11'
-  USE_BAZEL_VERSION: '6.4.0' # CRITICAL: Forces Bazelisk to download a compatible compiler core
+  PYTHON_VERSION: "3.11"
+  USE_BAZEL_VERSION: "6.4.0"
+  BAZEL_CACHE: /home/runner/bazel-cache
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Free up massive amounts of disk space for the Qualcomm Bazel build engine
       - name: Maximize Build Space
         uses: AdityaGarg8/remove-unwanted-software@v5
         with:
@@ -22,15 +22,14 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # Step 2: Target the explicit external Motorola repository and Android 16 branch
       - name: Checkout Motorola Kernel Source
         uses: actions/checkout@v4
         with:
-          repository: 'MotorolaMobilityLLC/kernel-msm'
-          ref: 'android-16-release-w1uui36h.110-31'
+          repository: MotorolaMobilityLLC/kernel-msm
+          ref: android-16-release-w1uui36h.110-31
           fetch-depth: 1
+          path: msm-kernel
 
-      # Step 3: Setup host environment dependencies
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -38,102 +37,102 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          sudo apt update
-          sudo apt install -y bc bison build-essential flex git libelf-dev libssl-dev openssl zip unzip
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex git libelf-dev libssl-dev \
+            openssl zip unzip curl rsync xz-utils
+          python -m pip install --upgrade pip
           pip install PyYAML
 
-      # Step 4: Restore previous compiler state to save execution hours
       - name: Restore Bazel Cache
-        id: cache-bazel
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
-          path: /home/runner/bazel-cache
-          key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
+          path: |
+            /home/runner/bazel-cache
+            /home/runner/.cache/bazel
+          key: ${{ runner.os }}-bazel-moto-parrot-${{ hashFiles('msm-kernel/**', 'build/kernel/**') }}
           restore-keys: |
             ${{ runner.os }}-bazel-moto-parrot-
 
-      # Step 5: Pull and hook KernelSU
+      - name: Checkout Android Kleaf Build Repo
+        run: |
+          mkdir -p build
+          if [ ! -d build/kernel/.git ]; then
+            git clone --depth 1 https://android.googlesource.com/kernel/build build/kernel
+          fi
+
+      - name: Provide Bazel launcher at workspace root
+        run: |
+          mkdir -p tools
+          curl -L \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 \
+            -o tools/bazel
+          chmod +x tools/bazel
+
+      - name: Create Workspace File
+        working-directory: msm-kernel
+        run: |
+          cp bazel.WORKSPACE ../WORKSPACE
+          cp bazel.WORKSPACE ../WORKSPACE.bazel || true
+
       - name: Integrate KernelSU
+        working-directory: msm-kernel
         run: |
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
-      # Step 6: Fetch and apply SUSFS patches + handle base.c alignment fix
       - name: Integrate SUSFS Patches
+        working-directory: msm-kernel
         run: |
-          # Clone the matching SUSFS branch one directory level above to keep the workspace root clean
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6 ../susfs4ksu
-          
-          # Move core system patches and headers into position
+
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch .
-          
-          # Apply Inline Hooks for KernelSU
-          cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
-          
-          # Apply main kernel patch (ignores the include mismatch error code via || true)
+
+          cd KernelSU
+          patch -p1 < 10_enable_susfs_for_ksu.patch
+          cd ..
+
           patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
-          
-          # Inject the missing SUSFS header cleanly into base.c via sed
           sed -i '/#include <linux\/proc_fs.h>/a #include <linux/susfs.h>' fs/proc/base.c
 
-      # Step 7: Inject custom configurations into the device kernel defconfigs
       - name: Inject Configuration Directives
+        working-directory: msm-kernel
         run: |
           echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/gki_defconfig
           if [ -f arch/arm64/configs/vendor/parrot_defconfig ]; then
             echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/parrot_defconfig
           fi
 
-      # Step 8: Reconstruct the workspace structure layout required by Qualcomm's script
-      - name: Setup Qualcomm Bazel Workspace Environment
-        run: |
-          # Create expected companion directories in the parent directory level
-          mkdir -p ../tools ../build
-          
-          # Download and configure Bazelisk to act as the main hermetic 'bazel' tool manager
-          curl -Lo ../tools/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
-          chmod +x ../tools/bazel
-          
-          # FIX: Explicitly lock Bazelisk to 6.4.0 inside layout files to reinforce the env flag
-          echo "6.4.0" > ../.bazelversion
-          echo "6.4.0" > .bazelversion
-          
-          # Expose workspace structure keys to the parent root directory folder
-          cp bazel.WORKSPACE ../WORKSPACE
-
-      # Step 9: Execute the compilation script with unique isolated cache location parameters
       - name: Compile Kernel via Bazel
+        working-directory: msm-kernel
         run: |
-          python3 build_with_bazel.py -t parrot gki \
-            --cache_dir "/home/runner/bazel-cache" \
-            --lto=thin \
-            --jobs=2 \
-            --local_ram_resources=6144 \
-            -o "$(pwd)/out"
+          python3 build_with_bazel.py \
+            -t parrot gki \
+            --cache_dir "${BAZEL_CACHE}" \
+            -o "${GITHUB_WORKSPACE}/out" \
+            --log info
 
-      # Step 10: Save the compilation state if the build completed successfully
       - name: Save Bazel Cache
         if: success()
-        uses: actions/cache/save@v4
+        uses: actions/cache@v4
         with:
-          path: /home/runner/bazel-cache
-          key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
+          path: |
+            /home/runner/bazel-cache
+            /home/runner/.cache/bazel
+          key: ${{ runner.os }}-bazel-moto-parrot-${{ hashFiles('msm-kernel/**', 'build/kernel/**') }}
 
-      # Step 11: Extract successfully compiled images and generate safety hashes
       - name: Bundle Artifacts and Generate Checksums
         run: |
           mkdir -p distribution
-          # Collect successfully built assets dynamically
-          cp out/msm-kernel-parrot-gki/dist/Image distribution/ 2>/dev/null || cp out/dist/Image distribution/ 2>/dev/null || true
-          cp out/msm-kernel-parrot-gki/dist/*.ko distribution/ 2>/dev/null || cp out/dist/*.ko distribution/ 2>/dev/null || true
-          
-          # Generate integrity hash
+          cp -r out/msm-kernel-parrot-gki/dist/* distribution/ 2>/dev/null || true
+          cp -r out/*/dist/* distribution/ 2>/dev/null || true
           cd distribution
-          sha256sum * > SHA256SUMS.txt
+          if ls * >/dev/null 2>&1; then
+            sha256sum * > SHA256SUMS.txt
+          fi
 
-      # Step 12: Upload the flashable output items
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
