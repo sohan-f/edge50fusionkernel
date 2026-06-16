@@ -55,20 +55,23 @@ jobs:
           # Pulls the official tool directly into the checked-out workspace root
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
-      - name: Integrate SUSFS Patches
-        run: |
-          # Clone the matching SUSFS branch one directory level above to keep the workspace root clean
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6 ../susfs4ksu
-          
-          # Move core system patches and headers into position
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
-          cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-6.6.patch .
-          
-          # Apply Inline Hooks
-          cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
-          patch -p1 < 50_add_susfs_in_kernel-6.6.patch
+          - name: Integrate SUSFS Patches
+      run: |
+        # Clone the matching SUSFS branch one directory level above to keep the workspace root clean
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6 ../susfs4ksu
+        
+        # Move core system patches and headers into position
+        cp ../susfs4ksu/kernel_patches/fs/* ./fs/
+        cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+        cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
+        
+        
+        cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch .
+        
+        # Apply Inline Hooks
+        cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
+        
+        patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch
 
       - name: Inject Configuration Directives
         run: |
