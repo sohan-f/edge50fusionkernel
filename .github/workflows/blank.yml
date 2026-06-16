@@ -41,12 +41,12 @@ jobs:
           sudo apt install -y bc bison build-essential flex git libelf-dev libssl-dev openssl zip unzip
           pip install PyYAML
 
-      # Step 4: Restore previous compiler state to save execution hours
+      # FIX: Adjusted cache tracking path completely outside the main repository directory root
       - name: Restore Bazel Cache
         id: cache-bazel
         uses: actions/cache/restore@v4
         with:
-          path: bazel-cache
+          path: /home/runner/bazel-cache
           key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-bazel-moto-parrot-
@@ -85,7 +85,7 @@ jobs:
             echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/parrot_defconfig
           fi
 
-      # NEW: Step 8: Reconstruct the workspace structure layout required by Qualcomm's script
+      # Step 8: Reconstruct the workspace structure layout required by Qualcomm's script
       - name: Setup Qualcomm Bazel Workspace Environment
         run: |
           # Create expected companion directories in the parent directory level
@@ -99,21 +99,23 @@ jobs:
           cp bazel.WORKSPACE ../WORKSPACE
           cp .bazelversion ../.bazelversion 2>/dev/null || true
 
-      # Step 9: Execute the compilation script with strict hardware execution constraints
+      # Step 9: Execute the compilation script with unique isolated cache location parameters
       - name: Compile Kernel via Bazel
         run: |
+          # FIX: Added --cache_dir to shift execution root safely outside the workspace layout boundaries
           python3 build_with_bazel.py -t parrot gki \
+            --cache_dir "/home/runner/bazel-cache" \
             --lto=thin \
             --jobs=2 \
             --local_ram_resources=6144 \
             -o "$(pwd)/out"
 
-      # Step 10: Save the compilation state if the build completed successfully
+      # FIX: Adjusted cache compression targeting to capture isolated path structural elements
       - name: Save Bazel Cache
         if: success()
         uses: actions/cache/save@v4
         with:
-          path: bazel-cache
+          path: /home/runner/bazel-cache
           key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
 
       # Step 11: Extract successfully compiled images and generate safety hashes
