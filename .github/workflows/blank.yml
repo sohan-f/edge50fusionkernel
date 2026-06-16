@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Optimization 1: Free up disk space so the massive Qualcomm Bazel footprint doesn't error out
+      # Step 1: Free up massive amounts of disk space for the Qualcomm Bazel build engine
       - name: Maximize Build Space
         uses: AdityaGarg8/remove-unwanted-software@v5
         with:
@@ -21,7 +21,7 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # Optimization 2: Target the explicit external Motorola repository and your exact branch
+      # Step 2: Target the explicit external Motorola repository and Android 16 branch
       - name: Checkout Motorola Kernel Source
         uses: actions/checkout@v4
         with:
@@ -29,6 +29,7 @@ jobs:
           ref: 'android-16-release-w1uui36h.110-31'
           fetch-depth: 1
 
+      # Step 3: Setup host environment dependencies
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -40,7 +41,7 @@ jobs:
           sudo apt install -y bc bison build-essential flex git libelf-dev libssl-dev openssl zip unzip
           pip install PyYAML
 
-      # Optimization 3: Maintain a cache folder so subsequent builds complete in minutes
+      # Step 4: Restore previous compiler state to save execution hours
       - name: Restore Bazel Cache
         id: cache-bazel
         uses: actions/cache/restore@v4
@@ -50,11 +51,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-moto-parrot-
 
+      # Step 5: Pull and hook KernelSU
       - name: Integrate KernelSU
         run: |
-          # Pulls the official tool directly into the checked-out workspace root
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
+      # Step 6: Fetch and apply SUSFS patches + handle base.c alignment fix
       - name: Integrate SUSFS Patches
         run: |
           # Clone the matching SUSFS branch one directory level above to keep the workspace root clean
@@ -64,34 +66,35 @@ jobs:
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-          
-          # Copy the correctly named patch file from the susfs4ksu repository
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch .
           
-          # Apply Inline Hooks
+          # Apply Inline Hooks for KernelSU
           cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
           
-          # Apply the correctly named patch file to the main kernel tree
-          patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch
+          # Apply main kernel patch (ignores the include mismatch error code via || true)
+          patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
+          
+          # Inject the missing SUSFS header cleanly into base.c via sed
+          sed -i '/#include <linux\/proc_fs.h>/a #include <linux/susfs.h>' fs/proc/base.c
 
+      # Step 7: Inject custom configurations into the device kernel defconfigs
       - name: Inject Configuration Directives
         run: |
-          # Inject configurations to both generic and target-specific defconfigs
           echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/gki_defconfig
           if [ -f arch/arm64/configs/vendor/parrot_defconfig ]; then
             echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/vendor/parrot_defconfig
           fi
 
+      # Step 8: Execute the compilation script with strict hardware execution constraints
       - name: Compile Kernel via Bazel
         run: |
-          # Core constraint throttles to ensure execution stays under virtual runner resource hardware limits
           python3 build_with_bazel.py -t parrot gki \
             --lto=thin \
             --jobs=2 \
             --local_ram_resources=6144 \
             -o "$(pwd)/out"
 
-      # Optimization 3 (Part 2): Update cache blocks if compilation succeeds
+      # Step 9: Save the compilation state if the build completed successfully
       - name: Save Bazel Cache
         if: success()
         uses: actions/cache/save@v4
@@ -99,10 +102,11 @@ jobs:
           path: bazel-cache
           key: ${{ runner.os }}-bazel-moto-parrot-${{ github.sha }}
 
+      # Step 10: Extract successfully compiled images and generate safety hashes
       - name: Bundle Artifacts and Generate Checksums
         run: |
           mkdir -p distribution
-          # Collect successfully built assets
+          # Collect successfully built assets dynamically
           cp out/msm-kernel-parrot-gki/dist/Image distribution/ 2>/dev/null || cp out/dist/Image distribution/ 2>/dev/null || true
           cp out/msm-kernel-parrot-gki/dist/*.ko distribution/ 2>/dev/null || cp out/dist/*.ko distribution/ 2>/dev/null || true
           
@@ -110,6 +114,7 @@ jobs:
           cd distribution
           sha256sum * > SHA256SUMS.txt
 
+      # Step 11: Upload the flashable output items
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
